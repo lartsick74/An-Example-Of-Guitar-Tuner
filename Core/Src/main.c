@@ -23,6 +23,7 @@
 /* USER CODE BEGIN Includes */
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -49,7 +50,11 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 volatile uint32_t adc_value = 0;
-char message[] = "Hello STM32\r\n";
+#define NUM_SAMPLES 500
+
+uint16_t samples[NUM_SAMPLES];
+
+char uart_buffer[32];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -133,19 +138,62 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* USER CODE END WHILE */
+	  while (1)
+	  {
+	      /* USER CODE END WHILE */
 
-    /* USER CODE BEGIN 3 */
-  // Envoie le contenu de "message" sur USART2
-	  HAL_UART_Transmit(
-		  &huart2,                    // UART utilisé : USART2
-		  (uint8_t *)message,         // Données à envoyer
-		  sizeof(message) - 1,        // Nombre d'octets à envoyer
-		  HAL_MAX_DELAY               // Attend la fin de la transmission
-	  );
+	      /* USER CODE BEGIN 3 */
 
-	  // Attend 1 seconde avant le prochain message
-	  HAL_Delay(1000);
+	      // ==========================================
+	      // 1. ACQUISITION DES 500 ECHANTILLONS ADC
+	      // ==========================================
+
+	      for (int i = 0; i < NUM_SAMPLES; i++)
+	      {
+	          // Demande à ADC1 de démarrer une conversion.
+	          HAL_ADC_Start(&hadc1);
+
+	          // Attend que la conversion soit terminée.
+	          HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+
+	          // Stocke le résultat directement dans le tableau.
+	          samples[i] = HAL_ADC_GetValue(&hadc1);
+
+	          // Attend environ 1 ms avant la mesure suivante.
+	          // ATTENTION : uniquement pour notre test.
+	          HAL_Delay(1);
+	      }
+
+
+	      // ==========================================
+	      // 2. ENVOI DU BUFFER AU MAC PAR UART
+	      // ==========================================
+
+	      for (int i = 0; i < NUM_SAMPLES; i++)
+	      {
+	          // Transforme par exemple 1527 en "1527\r\n".
+	          int len = snprintf(
+	              uart_buffer,
+	              sizeof(uart_buffer),
+	              "%u\r\n",
+	              samples[i]
+	          );
+
+	          // Envoie l'échantillon au Mac.
+	          HAL_UART_Transmit(
+	              &huart2,
+	              (uint8_t *)uart_buffer,
+	              len,
+	              HAL_MAX_DELAY
+	          );
+	      }
+
+
+	      // Petite séparation entre deux acquisitions.
+	      HAL_Delay(1000);
+	  }
+
+	  /* USER CODE END 3 */
 
 	  // Command to read UART on My Mac terminal :
 	  // screen /dev/cu.usbmodem14303 115200
