@@ -129,12 +129,20 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
+	  // Demande à ADC1 de démarrer une nouvelle conversion analogique → numérique.
+	  // L'ADC va mesurer la tension présente sur PA0 / ADC1_IN0.
 	  HAL_ADC_Start(&hadc1);
 
+	  // Attend que la conversion ADC soit terminée.
+	  // HAL_MAX_DELAY signifie qu'on attend aussi longtemps que nécessaire.
 	  HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
 
+	  // Récupère le résultat de la conversion ADC.
+	  // Avec notre ADC 12 bits, adc_value sera compris entre 0 et 4095.
 	  adc_value = HAL_ADC_GetValue(&hadc1);
 
+	  // Attend 100 ms avant de continuer.
+	  // Dans notre while(1), cela limite approximativement la lecture à 10 mesures/seconde.
 	  HAL_Delay(100);
     /* USER CODE BEGIN 3 */
   }
