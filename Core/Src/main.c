@@ -146,6 +146,9 @@ int main(void)
 
 	  // Attend 1 seconde avant le prochain message
 	  HAL_Delay(1000);
+
+	  // Command to read UART on My Mac terminal :
+	  // screen /dev/cu.usbmodem14303 115200
   }
   /* USER CODE END 3 */
 }
