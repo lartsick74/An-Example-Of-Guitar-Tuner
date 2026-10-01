@@ -136,6 +136,16 @@ int main(void)
 
 
   ssd1306_UpdateScreen();
+
+//  // Arme/démarre l'ADC.
+//  // La conversion ne démarre plus immédiatement par logiciel :
+//  // l'ADC attend désormais les triggers envoyés par TIM2.
+//  HAL_ADC_Start(&hadc1);
+//
+//  // Démarre TIM2.
+//  // TIM2 génère un TRGO toutes les 125 us, soit 8000 fois par seconde.
+//  HAL_TIM_Base_Start(&htim2);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -146,54 +156,91 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
 
-	      // ==========================================
-	      // 1. ACQUISITION DES 500 ECHANTILLONS ADC
-	      // ==========================================
 
-	      for (int i = 0; i < NUM_SAMPLES; i++)
-	      {
-	          // Demande à ADC1 de démarrer une conversion.
-	          HAL_ADC_Start(&hadc1);
+	    // ============================================================
+	    // 1. Prépare l'ADC à recevoir les triggers de TIM2
+	    // ============================================================
 
-	          // Attend que la conversion soit terminée.
-	          HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
+	    HAL_ADC_Start(&hadc1);
 
-	          // Stocke le résultat directement dans le tableau.
-	          samples[i] = HAL_ADC_GetValue(&hadc1);
+	    // ============================================================
+	    // 2. Démarre TIM2
+	    //    Il génère maintenant un TRGO toutes les 125 us
+	    // ============================================================
 
-	          // Attend environ 1 ms avant la mesure suivante.
-	          // ATTENTION : uniquement pour notre test.
-	          HAL_Delay(1);
-	      }
+	    HAL_TIM_Base_Start(&htim2);
+      // ============================================================
+      // ACQUISITION DE 500 ECHANTILLONS CADENCES PAR TIM2 A 8 kHz
+      // ============================================================
 
+      for (int i = 0; i < NUM_SAMPLES; i++)
+      {
+          // Attend que l'ADC ait terminé une conversion.
+          //
+          // Contrairement à avant, nous ne faisons PLUS :
+          //
+          // HAL_ADC_Start(&hadc1);
+          //
+          // à chaque tour.
+          //
+          // C'est TIM2 qui déclenche automatiquement une nouvelle
+          // conversion ADC toutes les 125 us.
+          HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
 
-	      // ==========================================
-	      // 2. ENVOI DU BUFFER AU MAC PAR UART
-	      // ==========================================
-
-	      for (int i = 0; i < NUM_SAMPLES; i++)
-	      {
-	          // Transforme par exemple 1527 en "1527\r\n".
-	          int len = snprintf(
-	              uart_buffer,
-	              sizeof(uart_buffer),
-	              "%u\r\n",
-	              samples[i]
-	          );
-
-	          // Envoie l'échantillon au Mac.
-	          HAL_UART_Transmit(
-	              &huart2,
-	              (uint8_t *)uart_buffer,
-	              len,
-	              HAL_MAX_DELAY
-	          );
-	      }
+          // Récupère le résultat de la conversion ADC 12 bits
+          // et le range dans notre buffer.
+          samples[i] = HAL_ADC_GetValue(&hadc1);
+      }
 
 
-	      // Petite séparation entre deux acquisitions.
-	      HAL_Delay(1000);
+      // ============================================================
+      // LE BUFFER EST MAINTENANT COMPLET
+      // ============================================================
+      //
+      // samples[0] = mesure à t ~= 0
+      // samples[1] = mesure à t ~= 125 us
+      // samples[2] = mesure à t ~= 250 us
+      // ...
+      //
+      // Les échantillons sont donc espacés de 125 us grâce à TIM2.
+      // ============================================================
+	  // 4. Arrête TIM2
+	  //    Plus aucun trigger n'est envoyé à l'ADC pendant l'UART
+	  // ============================================================
 
+	  HAL_TIM_Base_Stop(&htim2);
+
+	  // Arrête également l'ADC pour repartir proprement
+	  HAL_ADC_Stop(&hadc1);
+
+      // ============================================================
+      // ENVOI DES 500 ECHANTILLONS AU MAC PAR UART
+      // ============================================================
+
+      for (int i = 0; i < NUM_SAMPLES; i++)
+      {
+          // Convertit la valeur ADC en texte.
+          // Exemple : 1532 devient "1532\r\n".
+          int len = snprintf(
+              uart_buffer,
+              sizeof(uart_buffer),
+              "%u\r\n",
+              samples[i]
+          );
+
+          // Envoie la valeur au Mac via USART2.
+          HAL_UART_Transmit(
+              &huart2,
+              (uint8_t *)uart_buffer,
+              len,
+              HAL_MAX_DELAY
+          );
+      }
+
+
+      // Attend avant de réaliser une nouvelle acquisition.
+      HAL_Delay(1000);
+  }
 
   /* USER CODE END 3 */
 }
@@ -265,8 +312,8 @@ static void MX_ADC1_Init(void)
   hadc1.Init.ScanConvMode = DISABLE;
   hadc1.Init.ContinuousConvMode = DISABLE;
   hadc1.Init.DiscontinuousConvMode = DISABLE;
-  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_NONE;
-  hadc1.Init.ExternalTrigConv = ADC_SOFTWARE_START;
+  hadc1.Init.ExternalTrigConvEdge = ADC_EXTERNALTRIGCONVEDGE_RISING;
+  hadc1.Init.ExternalTrigConv = ADC_EXTERNALTRIGCONV_T2_TRGO;
   hadc1.Init.DataAlign = ADC_DATAALIGN_RIGHT;
   hadc1.Init.NbrOfConversion = 1;
   hadc1.Init.DMAContinuousRequests = DISABLE;
@@ -346,7 +393,7 @@ static void MX_TIM2_Init(void)
   htim2.Instance = TIM2;
   htim2.Init.Prescaler = 1;
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 4294967295;
+  htim2.Init.Period = 999;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
@@ -358,7 +405,7 @@ static void MX_TIM2_Init(void)
   {
     Error_Handler();
   }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_UPDATE;
   sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
   {
