@@ -45,8 +45,11 @@ ADC_HandleTypeDef hadc1;
 
 I2C_HandleTypeDef hi2c1;
 
+UART_HandleTypeDef huart2;
+
 /* USER CODE BEGIN PV */
 volatile uint32_t adc_value = 0;
+char message[] = "Hello STM32\r\n";
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -54,6 +57,7 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_ADC1_Init(void);
 static void MX_I2C1_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -99,6 +103,7 @@ int main(void)
   MX_GPIO_Init();
   MX_ADC1_Init();
   MX_I2C1_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   ssd1306_Init();
   //  ssd1306_Fill(White);
@@ -129,22 +134,18 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	  // Demande à ADC1 de démarrer une nouvelle conversion analogique → numérique.
-	  // L'ADC va mesurer la tension présente sur PA0 / ADC1_IN0.
-	  HAL_ADC_Start(&hadc1);
 
-	  // Attend que la conversion ADC soit terminée.
-	  // HAL_MAX_DELAY signifie qu'on attend aussi longtemps que nécessaire.
-	  HAL_ADC_PollForConversion(&hadc1, HAL_MAX_DELAY);
-
-	  // Récupère le résultat de la conversion ADC.
-	  // Avec notre ADC 12 bits, adc_value sera compris entre 0 et 4095.
-	  adc_value = HAL_ADC_GetValue(&hadc1);
-
-	  // Attend 100 ms avant de continuer.
-	  // Dans notre while(1), cela limite approximativement la lecture à 10 mesures/seconde.
-	  HAL_Delay(100);
     /* USER CODE BEGIN 3 */
+  // Envoie le contenu de "message" sur USART2
+	  HAL_UART_Transmit(
+		  &huart2,                    // UART utilisé : USART2
+		  (uint8_t *)message,         // Données à envoyer
+		  sizeof(message) - 1,        // Nombre d'octets à envoyer
+		  HAL_MAX_DELAY               // Attend la fin de la transmission
+	  );
+
+	  // Attend 1 seconde avant le prochain message
+	  HAL_Delay(1000);
   }
   /* USER CODE END 3 */
 }
@@ -277,6 +278,39 @@ static void MX_I2C1_Init(void)
 }
 
 /**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
   * @brief GPIO Initialization Function
   * @param None
   * @retval None
@@ -310,6 +344,8 @@ void Error_Handler(void)
   /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
+
+
   {
   }
   /* USER CODE END Error_Handler_Debug */
