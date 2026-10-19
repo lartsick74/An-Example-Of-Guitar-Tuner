@@ -24,6 +24,9 @@
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include <stdio.h>
+#include <math.h>
+#include <string.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -33,7 +36,14 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define NUM_SAMPLES 500
+#define FS            8000.0f
+#define FMIN          70.0f
+#define FMAX          400.0f
+#define TAUMIN        ((int)(FS / FMAX))     // 20
+#define TAUMAX        ((int)(FS / FMIN))     // 114
+#define SEUIL_YIN     0.15f
+#define SEUIL_SILENCE 20.0f                  // provisoire, à mesurer
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -52,11 +62,16 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 volatile uint32_t adc_value = 0;
-#define NUM_SAMPLES 500
+static float d[TAUMAX + 1];
+static float dn[TAUMAX + 1];
 
 uint16_t samples[NUM_SAMPLES];
+float samples_centered[NUM_SAMPLES];
 
-char uart_buffer[32];
+char uart_buffer[64];
+static const char  *NOMS[6]  = { "E2", "A2", "D3", "G3", "B3", "E4" };
+static const float  FREQS[6] = { 82.41f, 110.00f, 146.83f,
+                                 196.00f, 246.94f, 329.63f };
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -67,6 +82,10 @@ static void MX_I2C1_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM2_Init(void);
 /* USER CODE BEGIN PFP */
+static float centrer(const uint16_t *in, float *out, int n);   // renvoie le RMS
+static float yin(const float *x, int n);                        // renvoie f en Hz, ou -1.0f
+static int identifier(float f, float *cents);                 // renvoie l'indice de la corde (0..5)
+static void uart_print(const char *s);
 
 /* USER CODE END PFP */
 
@@ -216,30 +235,37 @@ int main(void)
       // ============================================================
       // ENVOI DES 500 ECHANTILLONS AU MAC PAR UART
       // ============================================================
+	  // --- 2. CENTRAGE + SILENCE ---
+	  float rms = centrer(samples, samples_centered, NUM_SAMPLES);
+	  snprintf(uart_buffer, sizeof(uart_buffer), "rms=%d\r\n", (int)rms);
+	  uart_print(uart_buffer);
 
-      for (int i = 0; i < NUM_SAMPLES; i++)
-      {
-          // Convertit la valeur ADC en texte.
-          // Exemple : 1532 devient "1532\r\n".
-          int len = snprintf(
-              uart_buffer,
-              sizeof(uart_buffer),
-              "%u\r\n",
-              samples[i]
-          );
-
-          // Envoie la valeur au Mac via USART2.
-          HAL_UART_Transmit(
-              &huart2,
-              (uint8_t *)uart_buffer,
-              len,
-              HAL_MAX_DELAY
-          );
-      }
+	  if (rms < SEUIL_SILENCE) {
+		  uart_print("silence\r\n");
+		  continue;// pas de YIN sur du bruit
+	  }
 
 
-      // Attend avant de réaliser une nouvelle acquisition.
-      HAL_Delay(1000);
+	  // --- 3. YIN ---
+	  float f = yin(samples_centered, NUM_SAMPLES);
+	  if (f < 0) {
+		  uart_print("pas de note\r\n");
+	  	  continue;
+	  }
+	  float cents = 0.0f;
+	  // --- 4. IDENTIFICATION ---
+	  int corde = identifier(f, &cents);
+
+	  // --- 5. AFFICHAGE UART ---
+	  snprintf(uart_buffer, sizeof(uart_buffer),
+	           "%s  %d.%02d Hz  %+d cents\r\n",
+	           NOMS[corde],                 // %s   -> "E2"
+	           (int)f,                      // %d   -> 83
+	           (int)(f * 100.0f) % 100,     // %02d -> 00
+	           (int)lroundf(cents));        // %+d  -> +12
+	  uart_print(uart_buffer);
+
+	  HAL_Delay(100);
 
   }
 
@@ -472,7 +498,99 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+// returns the RMS
+static float centrer(const uint16_t *in, float *out, int n) {
+	uint32_t sum = 0;
+	for (int i = 0; i< n; ++i){
+		sum+= in[i];
+	}
+	float mean = (float)sum / (float)n;
+	float squared_sum = 0.0f;
+	for (int i = 0; i< n; ++i){
+		float elem = (float) in[i];
+		float centered_elem = elem - mean;
+		out[i] = centered_elem;
+	    squared_sum += out[i] * out[i];
+	}
 
+	return sqrtf(squared_sum / n);
+
+}
+// return f in Hz, or -1.0f if frequency has not been found
+static float yin(const float *x, int n){
+	int W = n - TAUMAX;
+
+	// Difference function d
+	d[0] = 0.0f;
+	for (int tau = 1; tau <= TAUMAX; ++tau) {
+	    float s = 0.0f;                       // remis à zéro pour chaque tau
+	    for (int j = 0; j < W; ++j) {
+	        float e = x[j] - x[j + tau];
+	        s += e * e;
+	    }
+	    d[tau] = s;                           // on écrase, on n'accumule plus
+	}
+
+	dn[0] = 1.0f;
+	float cumul = 0.0f;
+	for (int tau = 1; tau <= TAUMAX; ++tau) {
+	    cumul += d[tau];
+	    dn[tau] = (cumul > 0.0f) ? d[tau] * (float)tau / cumul : 1.0f;
+	}
+
+	int tauBest = -1;
+	for (int tau = TAUMIN; tau < TAUMAX; ++tau) {
+	    if (dn[tau] < SEUIL_YIN) {
+	        while (tau + 1 < TAUMAX && dn[tau + 1] < dn[tau]) {
+	            tau++;
+	        }
+	        tauBest = tau;
+	        break;                            // on garde le PREMIER creux
+	    }
+	}
+
+	if (tauBest == -1) {
+		return -1.0f;
+	}
+
+	float a = dn[tauBest-1];
+	float b = dn[tauBest];
+	float c = dn[tauBest+1];
+	float denom = 2.0f * (a - 2.0f * b + c);
+	float delta = 0.0f;
+	if (fabsf(denom) > 1e-9f) {
+	    delta = (a - c) / denom;
+	}
+	float frequence = FS / ((float)tauBest + delta);
+
+	return frequence;
+
+}
+// return the string index (0 = E2.. 5= E5)
+static int identifier(float f, float *cents)
+{
+    int   best  = 0;
+    float min_gap  = INFINITY;
+    const float coeff = 1200.0f;
+    const float log_freq = log2f(f);
+    for (int i = 0; i < 6; i++)
+    {
+        float c = coeff * (log_freq - log2f(FREQS[i]));
+
+        if (fabs(c) < fabs(min_gap))
+        {
+            min_gap = c;
+            best = i;
+        }
+    }
+
+    *cents = min_gap;
+    return best;
+}
+static void uart_print(const char *s)
+{
+    HAL_UART_Transmit(&huart2, (uint8_t *)s, strlen(s), HAL_MAX_DELAY);
+}
 /* USER CODE END 4 */
 
 /**

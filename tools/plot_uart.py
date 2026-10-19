@@ -49,19 +49,33 @@ def trouver_port():
     return ports[0]
 
 
-def lire_trame(ser):
-    """Lit des lignes jusqu'à un silence de TIMEOUT s. Renvoie une liste d'int."""
-    valeurs = []
-    while True:
-        ligne = ser.readline()           # bloque au plus TIMEOUT secondes
-        if not ligne:                    # timeout -> silence
-            if valeurs:
-                return valeurs           # trame terminée
-            continue                     # pas encore commencé, on attend
-        try:
-            valeurs.append(int(ligne.strip()))
-        except ValueError:
-            pass                         # ligne corrompue / texte : ignorée
+class LecteurTrames:
+    """Lit le port sans bloquer. poll() renvoie une trame (liste d'int) quand
+    plus rien n'est arrivé depuis TIMEOUT s, sinon None. Comme poll() ne
+    bloque jamais, la fenêtre reste réactive (touches s / q)."""
+
+    def __init__(self, ser):
+        self.ser = ser
+        self.tampon = b""
+        self.valeurs = []
+        self.dernier_octet = time.time()
+
+    def poll(self):
+        n = self.ser.in_waiting
+        if n:
+            self.tampon += self.ser.read(n)
+            self.dernier_octet = time.time()
+            *lignes, self.tampon = self.tampon.split(b"\n")
+            for ligne in lignes:
+                try:
+                    self.valeurs.append(int(ligne.strip()))
+                except ValueError:
+                    pass                 # ligne corrompue / texte : ignorée
+            return None
+        if self.valeurs and time.time() - self.dernier_octet > TIMEOUT:
+            trame, self.valeurs, self.tampon = self.valeurs, [], b""
+            return trame                 # silence -> trame terminée
+        return None
 
 
 def sauvegarder(donnees):
@@ -88,6 +102,12 @@ def main():
         elif evt.key == "q":
             etat["quitter"] = True
 
+    # Par défaut, matplotlib associe "s" à "Enregistrer la figure" : on la
+    # libère pour notre sauvegarde CSV (ctrl+s / cmd+s restent disponibles).
+    for raccourci in ("s",):
+        if raccourci in plt.rcParams["keymap.save"]:
+            plt.rcParams["keymap.save"].remove(raccourci)
+
     plt.ion()
     fig, ax = plt.subplots(figsize=(11, 5))
     fig.canvas.mpl_connect("key_press_event", touche)
@@ -105,11 +125,13 @@ def main():
                                           lambda u: u * ADC_MAX / VREF))
     secax.set_ylabel("tension (V)")
 
+    lecteur = LecteurTrames(ser)
     try:
         while not etat["quitter"]:
-            # Laisse la fenêtre respirer pendant l'attente
-            ser.timeout = TIMEOUT
-            donnees = lire_trame(ser)
+            plt.pause(0.05)              # traite les touches / le redessin
+            donnees = lecteur.poll()
+            if donnees is None:
+                continue
 
             n = len(donnees)
             if n != N_ATTENDU:
