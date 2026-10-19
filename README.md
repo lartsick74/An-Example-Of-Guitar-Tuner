@@ -4,3 +4,5 @@ Here Is a project of a STM32 Guitar Tuner with a MAX 9814 Microphone and an OLED
 
 ## Read UART On mac
 screen /dev/cu.usbmodem14303 115200
+
+To quit screen : Ctrl + A then K then y
