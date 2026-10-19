@@ -240,6 +240,7 @@ int main(void)
 
       // Attend avant de réaliser une nouvelle acquisition.
       HAL_Delay(1000);
+
   }
 
   /* USER CODE END 3 */
